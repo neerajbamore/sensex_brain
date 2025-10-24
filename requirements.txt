@@ -1,0 +1,9 @@
+# requirements.txt file content (Copy this entire block)
+SmartApi
+pyotp
+requests
+pandas
+logzero
+numpy
+websocket-client
+ta
