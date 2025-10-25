@@ -1,4 +1,4 @@
-SmartApi
+SmartApi==1.0.12
 pyotp
 requests
 pandas
