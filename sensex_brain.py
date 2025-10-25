@@ -5,9 +5,12 @@ import math
 import signal
 import requests as rq
 import pandas as pd
+# PyOTP abhi zaroori hai login ke liye, isliye import karein:
+import pyotp 
 from datetime import datetime, timedelta, timezone
 from logzero import logger
 from typing import Dict, List, Tuple, Optional
+from SmartApi import SmartConnect # SmartConnect ko direct import karein
 
 # ==========================
 # Env / Config
@@ -68,16 +71,13 @@ def tg_send(msg: str):
 # SmartAPI login
 # ==========================
 def login_smartapi():
-    # Lazy import to avoid import error before deps install
-    from SmartApi import SmartConnect
-    import pyotp # <--- PyOTP ko ab requirements.txt mein daal diya hai
-
     if not all([API_KEY, CLIENT_CODE, PIN, TOTP_SECRET]):
         raise RuntimeError("Missing API creds in environment.")
 
     smart = SmartConnect(API_KEY)
     try:
-        totp = pyotp.TOTP(TOTP_SECRET).now()
+        # FIX: pyotp abhi bhi yahan use ho raha hai, isliye requirements.txt mein zaroori hai.
+        totp = pyotp.TOTP(TOTP_SECRET).now() 
         data = smart.generateSession(CLIENT_CODE, PIN, totp)
         if not data or data.get("status") is False:
             raise RuntimeError(f"Login failed: {data}")
@@ -113,10 +113,10 @@ def nearest_expiry_for_sensex_options() -> pd.Timestamp:
         (df["instrumenttype"] == INSTR_OPT) 
     ].copy()
     
-    # FILTERING BY NAME/SYMBOL (Enhanced Search)
+    # FIX: FILTERING BY NAME/SYMBOL (Enhanced Search)
     sensex_filter = (
         odf["name"].str.upper().str.contains(INDEX_NAME_FILTER, na=False) |
-        odf["symbol"].str.upper().str.contains(INDEX_NAME_FILTER, na=False)
+        odf["symbol"].str.upper().str.contains(INDEX_NAME_FILTER, na=False) # FIX: Symbol column mein bhi check karein
     )
     odf = odf[sensex_filter].copy()
 
@@ -124,7 +124,7 @@ def nearest_expiry_for_sensex_options() -> pd.Timestamp:
         raise RuntimeError("No SENSEX option scrip found in master after filtering.")
         
     # to datetime
-    odf["expiry"] = pd.to_datetime(odf["expiry"], errors='coerce') # Invalid dates ko NaT kar de
+    odf["expiry"] = pd.to_datetime(odf["expiry"], errors='coerce') 
     odf.dropna(subset=['expiry'], inplace=True)
     
     now = pd.Timestamp.now(tz=IST).normalize()
@@ -171,14 +171,14 @@ def find_atm_strike(smart) -> float:
         raise # <-- FIX: Agar Spot nahi mila toh yahan bhi fail karein
 
 def build_chain_tokens(atm: float, expiry: pd.Timestamp) -> List[Dict]:
-    """Return [{'exch':..., 'token':..., 'tsym':..., 'strike':..., 'side': 'CE/PE'}] for 7 CE + 7 PE."""
+    """Return [{'exch':..., 'token':..., 'tsym':..., 'strike':..., 'side': 'CE/PE'}] for N CE + N PE."""
     df = load_scrip()
     odf = df[
         (df["exch_seg"] == EXCH_BFO_OPT) &
         (df["instrumenttype"] == INSTR_OPT)
     ].copy()
     
-    # FILTERING BY NAME/SYMBOL (Enhanced Search)
+    # FIX: FILTERING BY NAME/SYMBOL (Enhanced Search)
     sensex_filter = (
         odf["name"].str.upper().str.contains(INDEX_NAME_FILTER, na=False) |
         odf["symbol"].str.upper().str.contains(INDEX_NAME_FILTER, na=False)
@@ -191,8 +191,8 @@ def build_chain_tokens(atm: float, expiry: pd.Timestamp) -> List[Dict]:
 
     # strikes we want
     steps = [i * 100 for i in range(0, N_STRIKES_EACH_SIDE + 1)]
-    ce_strikes = [atm + s for s in steps]                 # ATM + 0..700
-    pe_strikes = [atm - s for s in steps if s != 0]       # ATM -100..-700 (avoid duplicate ATM)
+    ce_strikes = [atm + s for s in steps]                 # ATM + 0..N*100
+    pe_strikes = [atm - s for s in steps if s != 0]       # ATM -100..-N*100 (avoid duplicate ATM)
     targets = set([(st, "CE") for st in ce_strikes] + [(st, "PE") for st in pe_strikes])
 
     rows = []
@@ -230,20 +230,18 @@ def build_chain_tokens(atm: float, expiry: pd.Timestamp) -> List[Dict]:
         # FIX: Agar is point par chain empty hai toh error do
         logger.error("Found %d SENSEX options for expiry %s, but 0 matched strikes (ATM: %.0f).", 
                      len(odf[odf["expiry"] == expiry]), expiry.date(), atm)
-        raise RuntimeError("Option chain tokens not found for requested strikes/expiry.")
+        raise RuntimeError("Option chain tokens not found for requested strikes/expiry.") # <-- FIX: Runtime Error
         
     return chain
 
 # ==========================
 # Quote parsing helpers
 # ==========================
-# (No changes needed in this section, it's already robust)
+# (No changes needed in this section)
 def _first_present(d: dict, *keys):
-    # ... (Old code) ...
     for k in keys:
         if d is None:
             break
-        # allow nested path like a.b.c
         if "." in k:
             cur = d
             ok = True
@@ -263,9 +261,7 @@ def _first_present(d: dict, *keys):
 def parse_quote_payload(qdata: dict) -> Dict[str, Optional[float]]:
     """
     Try to extract ltp, oi, iv, volume from Angel REST quote.
-    Different deployments use different keys. We try many.
     """
-    # If list wrapped
     if isinstance(qdata, dict) and "data" in qdata:
         data = qdata["data"]
         if isinstance(data, list) and data:
@@ -277,7 +273,6 @@ def parse_quote_payload(qdata: dict) -> Dict[str, Optional[float]]:
     else:
         payload = qdata
 
-    # Sometimes quote sits in 'fetched'/'ltp' etc. Try several fields.
     ltp    = _first_present(payload, "ltp", "last_price", "lastprice", "last_traded_price")
     oi     = _first_present(payload, "oi", "open_interest", "openinterest", "o_i")
     iv     = _first_present(payload, "iv", "implied_volatility", "impliedvol", "greeks.iv")
@@ -290,7 +285,6 @@ def parse_quote_payload(qdata: dict) -> Dict[str, Optional[float]]:
             "volume": float(volume) if volume is not None else None,
         }
     except Exception:
-        # If types mixed, return what we can
         out = {}
         for k, v in [("ltp", ltp), ("oi", oi), ("iv", iv), ("volume", volume)]:
             try:
@@ -367,13 +361,10 @@ def main_loop():
             alerts = []
             for scrip in chain:
                 try:
-                    # getQuote(s) can vary; use getQuotes for list style if available, else fallback to getLtpData
                     quote_payload = None
                     try:
-                        # Many SDK builds expose getQuotes with JSON list
                         quote_payload = smart.getQuotes({"exchange": scrip["exch"], "symboltoken": scrip["token"]})
                     except Exception:
-                        # Fallback – only LTP
                         quote_payload = smart.getLtpData(exchange=scrip["exch"], tradingsymbol=scrip["tsym"], symboltoken=scrip["token"])
 
                     parsed = parse_quote_payload(quote_payload)
@@ -411,7 +402,6 @@ def main_loop():
             if alerts:
                 techline = ""
                 if tech:
-                    # Markdown formatting ke liye '*' use kiya
                     techline = f"\nSpot *{spot:.2f}* | EMA *{tech['ema12']:.0f}* / *{tech['ema26']:.0f}* | MACD *{tech['macd']:.2f}*/*{tech['signal']:.2f}* | RSI *{tech['rsi']:.1f}*"
                 msg = "🚨 Sensex Options Alert(s):\n• " + "\n• ".join(alerts) + techline
                 tg_send(msg)
@@ -437,7 +427,6 @@ def _graceful_exit(signum, frame):
     raise SystemExit
 
 if __name__ == "__main__":
-    # Check for market hours or add a sleep here if needed (Optional)
     signal.signal(signal.SIGINT, _graceful_exit)
     signal.signal(signal.SIGTERM, _graceful_exit)
     main_loop()
